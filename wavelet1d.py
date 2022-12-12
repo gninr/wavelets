@@ -6,6 +6,21 @@ import matplotlib.pyplot as plt
 
 
 class ScalingFunction:
+    def refinement_coeffs(self):
+        return self.a
+
+    def __call__(self, x):
+        return self.phi(x)
+
+    def plot(self, scale=1., fct=None):
+        if fct is None:
+            fct = self
+        x = np.linspace(self.l1, self.l2, 1000)
+        plt.plot(x, scale * fct(x))
+        plt.show()
+
+
+class PrimalScalingFunction(ScalingFunction):
     def __init__(self, d):
         self.d = d
         self.l1 = -floor(d / 2)
@@ -23,28 +38,22 @@ class ScalingFunction:
         knots = np.concatenate((np.zeros(d - 1),
                                 np.arange(d + 1),
                                 np.full(d - 1, d))) + self.l1
-        coeffs = np.zeros(2*d - 1)
-        coeffs[d - 1] = 1.
+        coeffs = np.zeros(2 * d - 1)
+        coeffs[d-1] = 1.
         self.phi = BSpline(knots, coeffs, d - 1, extrapolate=False)
-
-    def refinement_coeffs(self):
-        return self.a
 
     def __call__(self, x):
         return np.nan_to_num(self.phi(x))
 
     def plot(self, scale=1., nu=0):
-        f = self
+        fct = None
         if nu > 0:
-            f = self.derivative(nu)
-
-        x = np.linspace(self.l1, self.l2, 1000)
-        plt.plot(x, scale * f(x))
-        plt.show()
+            fct = self.derivative(nu)
+        super().plot(scale=scale, fct=fct)
 
     def derivative(self, nu=1):
         def deriv(x):
-            f = self.phi.derivative(nu=nu)
+            f = self.phi.derivative(nu)
             return np.nan_to_num(f(x))
         return deriv
 
@@ -58,8 +67,8 @@ class ScalingFunction:
             if abs(shift) > d:
                 return 0
             return a_corr[shift+d]
-        A = np.array([[entry(k, m) for m in range(-d+1, d)]
-                      for k in range(-d+1, d)])
+        A = np.array([[entry(k, m) for m in range(-d + 1, d)]
+                      for k in range(-d + 1, d)])
         w, v = np.linalg.eig(A)
         idx = np.argmax(w)
         assert np.isclose(w[idx], 2.)
@@ -68,11 +77,8 @@ class ScalingFunction:
         return g
 
     def inner_product(self, nu=0):
-        if nu == 0:
-            return self.gramian()
-
         d0 = self.d - nu
-        g = ScalingFunction(d0).gramian()
+        g = PrimalScalingFunction(d0).gramian()
 
         for d in range(d0 + 1, self.d + 1):
             gd = np.zeros(2*d-1)
@@ -83,7 +89,7 @@ class ScalingFunction:
         return g
 
 
-class DualScalingFunction:
+class DualScalingFunction(ScalingFunction):
     def __init__(self, d, d_t):
         assert (d + d_t) % 2 == 0
         self.d = d_t
@@ -97,7 +103,7 @@ class DualScalingFunction:
             for n in range(K):
                 for i in range(2 * n + 1):
                     res += 2**(1 - d_t - 2 * n) * (-1)**(n + i)\
-                           * binom(d_t, k + floor(d_t/2) - i + n)\
+                           * binom(d_t, k + floor(d_t / 2) - i + n)\
                            * binom(K - 1 + n, n) * binom(2 * n, i)
             return res
         self.a = \
@@ -115,13 +121,42 @@ class DualScalingFunction:
         X = (X - X.mean()) * 2**(-level) + d % 2 / 2
         self.phi = interp1d(X, eta, bounds_error=False, fill_value=0.)
 
+
+class MotherWavelet(PrimalScalingFunction):
+    def __init__(self, d, d_t):
+        self.d = d
+        self.d_t = d_t
+        self.l1 = 1 - (d + d_t) // 2
+        self.l2 = (d + d_t) // 2
+
+        # function
+        sf_t = DualScalingFunction(d, d_t)
+        a_t = sf_t.refinement_coeffs()
+        self.b = (-1)**np.arange(a_t.size) * np.flip(a_t)
+        knots = np.concatenate((np.zeros(d - 1),
+                                np.arange(2 * (d + d_t - 1) + 1) / 2,
+                                np.full(d - 1, d + d_t - 1))) + self.l1
+        coeffs = np.zeros(3 * d + 2 * d_t - 3)
+        coeffs[d-1:-d+1] = self.b
+        self.phi = BSpline(knots, coeffs, d - 1, extrapolate=False)
+
     def refinement_coeffs(self):
-        return self.a
+        raise NotImplementedError
 
-    def __call__(self, x):
-        return self.phi(x)
+    def gramian(self):
+        return self.inner_product()
 
-    def plot(self, scale=1.):
-        x = np.linspace(self.l1, self.l2, 1000)
-        plt.plot(x, scale * self(x))
-        plt.show()
+    def inner_product(self, nu=0):
+        d = self.d
+        d_t = self.d_t
+        offset = self.b.size - 1
+        b_corr = np.correlate(self.b, self.b, 'full')  # (2*offset+1,) array
+
+        def entry(k, m):
+            shift = 2 * k - m
+            if abs(shift) > offset:
+                return 0
+            return b_corr[shift+offset]
+        B = np.array([[entry(k, m) for m in range(-d + 1, d)]
+                      for k in range(-d - d_t + 2, d + d_t - 1)])
+        return 2**(2*nu-1) * B @ super().inner_product(nu)
