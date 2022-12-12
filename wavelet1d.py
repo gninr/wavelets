@@ -1,4 +1,4 @@
-from math import floor, ceil, isclose
+from math import floor, ceil
 import numpy as np
 from scipy.interpolate import BSpline
 from scipy.special import binom
@@ -42,12 +42,12 @@ class ScalingFunction:
             return np.nan_to_num(f(x))
         return deriv
 
-    def refinement_coeffs(self, nu=0):
-        return self.a * 2**nu
+    def refinement_coeffs(self):
+        return self.a
 
-    def inner_product(self, nu=0):
+    def gramian(self):
         d = self.d
-        a = self.refinement_coeffs(nu)
+        a = self.refinement_coeffs()
         a_corr = np.correlate(a, a, 'full')  # (2*d+1,) array
 
         def entry(k, m):
@@ -58,7 +58,23 @@ class ScalingFunction:
         A = np.array([[entry(k, m) for m in range(-d+1, d)]
                       for k in range(-d+1, d)])
         w, v = np.linalg.eig(A)
-        idx = np.where(np.abs(w - 2.) < 1e-9)[0][0]
+        idx = np.argmax(w)
+        assert np.isclose(w[idx], 2.)
         g = v[:, idx]
         g /= g.sum()  # integrals of phi(x)*phi(x-k)
+        return g
+
+    def inner_product(self, nu=0):
+        if nu == 0:
+            return self.gramian()
+
+        d0 = self.d - nu
+        g = ScalingFunction(d0).gramian()
+
+        for d in range(d0 + 1, self.d + 1):
+            gd = np.zeros(2*d-1)
+            gd[1:-1] = 2 * g
+            gd[:-2] -= g
+            gd[2:] -= g
+            g = gd
         return g
