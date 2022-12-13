@@ -11,13 +11,15 @@ class PrimalMRA:
         self.compute_ML()
         self.sf = PrimalScalingFunction(d)
 
-    def basis_functions(self, j, from_refine_mat=False):
+    def basis_functions(self, j, nu=0, from_refine_mat=False):
         d = self.d
         n = 2**j + d - 1
         bs = []
 
         def bspline(knots, coeffs, d):
             b = BSpline(knots, coeffs, d - 1, extrapolate=False)
+            if nu > 0:
+                b = b.derivative(nu)
             return lambda x: np.nan_to_num(b(x))
 
         if from_refine_mat:
@@ -42,15 +44,15 @@ class PrimalMRA:
         d = self.d
         return (max(2**(-j) * (k-d+1), 0), min(2**(-j) * (k+1), 1))
 
-    def plot(self, j, k=None, from_refine_mat=False):
-        bs = self.basis_functions(j, from_refine_mat)
+    def plot(self, j, k=None, nu=0, from_refine_mat=False):
+        bs = self.basis_functions(j, nu, from_refine_mat)
         x = np.linspace(0, 1, 1000)
 
         if k is None:
             for b in bs:
-                plt.plot(x, np.nan_to_num(b(x)))
+                plt.plot(x, b(x))
         else:
-            plt.plot(x, np.nan_to_num(bs[k](x)))
+            plt.plot(x, bs[k](x))
         plt.show()
 
     def compute_ML(self):
@@ -108,3 +110,23 @@ class PrimalMRA:
         G[-n:, -n:] = GL[::-1, ::-1]
 
         return G
+
+    def inner_product(self, j, nu=0):
+        d0 = self.d - nu
+        A = PrimalMRA(d0).gramian(j)
+
+        for d in range(d0 + 1, self.d + 1):
+            for i in range(d - 2):
+                c = (d - 1) / (i + 1)
+                A[i, :] *= c
+                A[:, i] *= c
+                A[-i-1, :] *= c
+                A[:, -i-1] *= c
+            n = A.shape[0]
+            Ad = np.zeros((n + 1, n + 1))
+            Ad[:-1, :-1] += A
+            Ad[:-1, 1:] -= A
+            Ad[1:, :-1] -= A
+            Ad[1:, 1:] += A
+            A = 2**(2*j) * Ad
+        return A
