@@ -307,17 +307,31 @@ class WaveletBasis:
         return bs
 
     def support(self, j, k):
-        pass
-
-    def plot(self, j, k=None, nu=0):
-        bs = self.basis_functions(j, nu)
-        x = np.linspace(0, 1, 1000)
-
-        if k is None:
-            for b in bs:
-                plt.plot(x, b(x))
+        # primal
+        d = self.d
+        d_t = self.d_t
+        n = (d + d_t - 2) // 2  # number of boundary wavelets
+        if k < n:
+            return (0, 2**(-j) * (d + d_t - 2))
+        elif k >= 2**j - n:
+            return (1 - 2**(-j) * (d + d_t - 2), 1)
         else:
-            plt.plot(x, bs[k](x))
+            return (max(2**(-j) * (k-n), 0), min(2**(-j) * (k-n+d+d_t-1), 1))
+
+    def plot(self, j, k=None, nu=0, boundary=False):
+        bs = self.basis_functions(j, nu)
+        if boundary:
+            L = self.d + self.d_t - 2
+            x = np.linspace(0, 2**(-j) * L, 1000)
+            assert k is not None and k < L // 2
+            plt.plot(2**j * x, 2**(-j/2) * bs[k](x))
+        else:
+            x = np.linspace(0, 1, 1000)
+            if k is None:
+                for b in bs:
+                    plt.plot(x, b(x))
+            else:
+                plt.plot(x, bs[k](x))
         plt.show()
 
     def initial_completion(self, j):
@@ -397,9 +411,9 @@ class WaveletBasis:
         H_hat_inv[d-1:1-d, d-1:1-d] = H_inv
 
         M0 = self.mra.refinement_matrix(j)
-        M1 = 1 / np.sqrt(2) * P @ H_hat_inv @ F_hat
+        M1 = (-1)**(d+1) * np.sqrt(2) / b * P @ H_hat_inv @ F_hat
         G0 = np.sqrt(2) * B_hat @ H_hat @ P_inv
-        G1 = np.sqrt(2) * F_hat.T @ H_hat @ P_inv
+        G1 = (-1)**(d+1) * b / np.sqrt(2) * F_hat.T @ H_hat @ P_inv
         return M0, M1, G0, G1
 
     def refinement_matrix(self, j):
@@ -422,7 +436,9 @@ class WaveletBasis:
         return M0, M1, M0_t, M1_t
 
     def gramian(self, j):
-        pass
+        G = self.mra.gramian(j + 1)
+        _, M1, _, _ = self.refinement_matrix(j)
+        return M1.T @ G @ M1
 
     def inner_product(self, j, nu=0):
         pass
