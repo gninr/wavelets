@@ -1,4 +1,5 @@
-from scaling_function import PrimalScalingFunction, DualScalingFunction
+from scaling_function import \
+    PrimalScalingFunction, DualScalingFunction, MotherWavelet
 from math import ceil, factorial
 import numpy as np
 from scipy.interpolate import BSpline
@@ -80,9 +81,10 @@ class PrimalMRA:
 
     def compute_A(self, j):
         d = self.d
+        a = self.sf.refinement_coeffs()
         A = np.zeros((2**(j+1) - d + 1, 2**j - d + 1))
         for k in range(2**j - d + 1):
-            A[2*k:2*k+d+1, k] = self.sf.refinement_coeffs()
+            A[2*k:2*k+d+1, k] = a
         return A
 
     def refinement_matrix(self, j):
@@ -261,9 +263,10 @@ class DualMRA:
         assert j >= self.j0
         d = self.d
         d_t = self.d_t
+        a_t = self.sf_t.refinement_coeffs()
         A_t = np.zeros((2**(j+1) - d - 2 * d_t + 3, 2**j - d - 2 * d_t + 3))
         for k in range(2**j - d - 2 * d_t + 3):
-            A_t[2*k:2*k+d+2*d_t-1, k] = self.sf_t.refinement_coeffs()
+            A_t[2*k:2*k+d+2*d_t-1, k] = a_t
         return A_t
 
     def refinement_matrix(self, j):
@@ -281,10 +284,13 @@ class WaveletBasis:
     def __init__(self, d, d_t):
         self.d = d
         self.d_t = d_t
+        self.j0 = ceil(np.log2(d + d_t - 2) + 1)
         self.sf = PrimalScalingFunction(d)
         self.sf_t = DualScalingFunction(d, d_t)
+        self.mw = MotherWavelet(d, d_t)
         self.mra = PrimalMRA(d)
         self.mra_t = DualMRA(d, d_t)
+        self.compute_GL()
 
     def basis_functions(self, j, nu=0):
         d = self.d
@@ -297,7 +303,7 @@ class WaveletBasis:
                 b = b.derivative(nu)
             return lambda x: np.nan_to_num(b(x))
 
-        _, M1, _, _ = self.refinement_matrix(j)
+        M1 = self.refinement_matrix(j)
         knots = np.concatenate((np.zeros(d - 1),
                                 np.linspace(0, 1, 2**(j+1) + 1),
                                 np.ones(d - 1)))
@@ -416,29 +422,102 @@ class WaveletBasis:
         G1 = (-1)**(d+1) * b / np.sqrt(2) * F_hat.T @ H_hat @ P_inv
         return M0, M1, G0, G1
 
-    def refinement_matrix(self, j):
-        M0, M1, _, G1 = self.initial_completion(j)
-        M0_t = self.mra_t.refinement_matrix(j)
+    def compute_GL(self):
+        d = self.d
+        d_t = self.d_t
+        j0 = self.mra_t.j0
+        M0, M1, _, G1 = self.initial_completion(j0)
+        M0_t = self.mra_t.refinement_matrix(j0)
         M1 = M1 - M0 @ M0_t.T @ M1
+        M1_t = G1.T
 
-        # Symmetrize
-        N1 = M1[:, :2**(j-1)]
-        N1_t = G1.T[:, :2**(j-1)]
-        H1 = np.hstack((N1, N1[::-1, ::-1]))
-        H1_t = np.hstack((N1_t, N1_t[::-1, ::-1]))
-        M1 = np.linalg.solve(H1.T @ H1_t, H1.T).T
-        M1_t = H1_t
+        GL = np.sqrt(2) * M1[:2*(d+d_t-2), :(d+d_t-2)//2]
+        GL[np.abs(GL) < 1e-9] = 0.
+        self.GL = GL
 
-        M0[np.abs(M0) < 1e-9] = 0.
-        M1[np.abs(M1) < 1e-9] = 0.
-        M0_t[np.abs(M0_t) < 1e-9] = 0.
-        M1_t[np.abs(M1_t) < 1e-9] = 0.
-        return M0, M1, M0_t, M1_t
+        GL_t = np.sqrt(2) * M1_t[:2*d+d_t-3, :(d+d_t-2)//2]
+        GL_t[np.abs(GL_t) < 1e-9] = 0.
+        self.GL_t = GL_t
+
+    def compute_B(self, j):
+        d = self.d
+        d_t = self.d_t
+        b = self.mw.refinement_coeffs()
+        B = np.zeros((2**(j+1) - d + 1, 2**j - d - d_t + 2))
+        for k in range(2**(j-1) - (d + d_t - 2) // 2):
+            B[2*k:2*k+d+2*d_t-1, k] = b
+        B += B[::-1, ::-1]
+        return B
+
+    def refinement_matrix(self, j, full=False):
+        if full:
+            M0, M1, _, G1 = self.initial_completion(j)
+            M0_t = self.mra_t.refinement_matrix(j)
+            M1 = M1 - M0 @ M0_t.T @ M1
+            M1_t = G1.T
+
+            # Symmetrize
+            N1 = M1[:, :2**(j-1)]
+            N1_t = M1_t[:, :2**(j-1)]
+            H1 = np.hstack((N1, N1[::-1, ::-1]))
+            H1_t = np.hstack((N1_t, N1_t[::-1, ::-1]))
+            M1 = np.linalg.solve(H1.T @ H1_t, H1.T).T
+            M1_t = H1_t
+
+            M0[np.abs(M0) < 1e-9] = 0.
+            M1[np.abs(M1) < 1e-9] = 0.
+            M0_t[np.abs(M0_t) < 1e-9] = 0.
+            M1_t[np.abs(M1_t) < 1e-9] = 0.
+            return M0, M1, M0_t, M1_t
+
+        d = self.d
+        d_t = self.d_t
+        M1 = np.zeros((2**(j+1) + d - 1, 2**j))
+        M1[:2*(d+d_t-2), :(d+d_t-2)//2] = self.GL
+        M1[d-1:1-d, (d+d_t-2)//2:-(d+d_t-2)//2] = self.compute_B(j)
+        M1[-2*(d+d_t-2):, -(d+d_t-2)//2:] = self.GL[::-1, ::-1]
+
+        return 1 / np.sqrt(2) * M1
 
     def gramian(self, j):
         G = self.mra.gramian(j + 1)
-        _, M1, _, _ = self.refinement_matrix(j)
+        M1 = self.refinement_matrix(j)
         return M1.T @ G @ M1
 
     def inner_product(self, j, nu=0):
         pass
+
+
+class MultiscaleWaveletBasis:
+    def __init__(self, d, d_t):
+        self.d = d
+        self.d_t = d_t
+        self.j0 = ceil(np.log2(d + d_t - 2) + 1)
+        self.mra = PrimalMRA(d)
+        self.wb = WaveletBasis(d, d_t)
+
+    def refinement_matrix(self, s, j0=None):
+        if j0 is None:
+            j0 = self.j0
+        else:
+            assert j0 >= self.j0
+
+        d = self.d
+        T = np.identity(2**(j0+s) + d - 1)
+        for j in range(j0, j0 + s):
+            M0 = self.mra.refinement_matrix(j)
+            M1 = self.wb.refinement_matrix(j)
+            M = np.hstack((M0, M1))
+            n = M.shape[0]
+            T[:n, :n] = M @ T[:n, :n]
+        return T
+
+    def gramian(self, s, j0=None):
+        if j0 is None:
+            j0 = self.j0
+        else:
+            assert j0 >= self.j0
+
+        G = self.mra.gramian(j0 + s)
+        T = self.refinement_matrix(s, j0)
+        return T.T @ G @ T

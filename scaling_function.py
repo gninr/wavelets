@@ -132,7 +132,8 @@ class MotherWavelet(PrimalScalingFunction):
         # function
         sf_t = DualScalingFunction(d, d_t)
         a_t = sf_t.refinement_coeffs()
-        self.b = (-1)**np.arange(a_t.size) * np.flip(a_t)
+        sgn = (-1)**np.abs(np.arange(1 - sf_t.l2, 2 - sf_t.l1))
+        self.b = sgn * np.flip(a_t)
         knots = np.concatenate((np.zeros(d - 1),
                                 np.arange(2 * (d + d_t - 1) + 1) / 2,
                                 np.full(d - 1, d + d_t - 1))) + self.l1
@@ -141,7 +142,7 @@ class MotherWavelet(PrimalScalingFunction):
         self.phi = BSpline(knots, coeffs, d - 1, extrapolate=False)
 
     def refinement_coeffs(self):
-        raise NotImplementedError
+        return self.b
 
     def gramian(self):
         return self.inner_product()
