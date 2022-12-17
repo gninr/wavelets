@@ -9,13 +9,16 @@ import matplotlib.pyplot as plt
 
 
 class PrimalMRA:
-    def __init__(self, d):
+    def __init__(self, d, bc=False):
+        assert d > 1
         self.d = d
+        self.bc = bc
         self.compute_ML()
         self.sf = PrimalScalingFunction(d)
 
     def basis_functions(self, j, nu=0, from_refine_mat=False):
         d = self.d
+        bc = self.bc
         n = 2**j + d - 1
         bs = []
 
@@ -27,17 +30,24 @@ class PrimalMRA:
 
         if from_refine_mat:
             M0 = self.refinement_matrix(j)
+            m = 2**(j+1) + d - 1
             knots = np.concatenate((np.zeros(d - 1),
                                     np.linspace(0, 1, 2**(j+1) + 1),
                                     np.ones(d - 1)))
-            for k in range(n):
-                coeffs = 2**((j+1)/2) * M0[:, k]
-                bs.append(bspline(knots, coeffs, d))
+            if bc:
+                for k in range(n - 2):
+                    coeffs = np.zeros(m)
+                    coeffs[1:-1] = 2**((j+1)/2) * M0[:, k]
+                    bs.append(bspline(knots, coeffs, d))
+            else:
+                for k in range(n):
+                    coeffs = 2**((j+1)/2) * M0[:, k]
+                    bs.append(bspline(knots, coeffs, d))
         else:
             knots = np.concatenate((np.zeros(d - 1),
                                     np.linspace(0, 1, 2**j + 1),
                                     np.ones(d - 1)))
-            for k in range(n):
+            for k in range(bc, n - bc):
                 coeffs = np.zeros(n)
                 coeffs[k] = 2**(j/2)
                 bs.append(bspline(knots, coeffs, d))
@@ -45,6 +55,7 @@ class PrimalMRA:
 
     def support(self, j, k):
         d = self.d
+        k += self.bc
         return (max(2**(-j) * (k-d+1), 0), min(2**(-j) * (k+1), 1))
 
     def plot(self, j, k=None, nu=0, from_refine_mat=False):
@@ -77,7 +88,12 @@ class PrimalMRA:
             b = BSpline(knots, coeffs, d - 1, extrapolate=False)
             B2[:, k] = b(x)
 
-        self.ML = solve_triangular(B2, B1)
+        ML = solve_triangular(B2, B1)
+        ML[np.abs(ML) < 1e-9] = 0.
+        if self.bc:
+            self.ML = ML[1:, 1:]
+        else:
+            self.ML = ML
 
     def compute_A(self, j):
         d = self.d
@@ -89,32 +105,40 @@ class PrimalMRA:
 
     def refinement_matrix(self, j):
         d = self.d
-        M0 = np.zeros((2**(j+1) + d - 1, 2**j + d - 1))
-        M0[:2*d-2, :d-1] = self.ML
-        M0[d-1:2**(j+1), d-1:2**j] = self.compute_A(j)
-        M0[2-2*d:, 1-d:] = self.ML[::-1, ::-1]
+        bc = self.bc
+        M0 = np.zeros((2**(j+1) + d - 1 - 2 * bc, 2**j + d - 1 - 2 * bc))
+        m, n = M0.shape
+        ML = self.ML
+        mL, nL = ML.shape
+        M0[:mL, :nL] = ML
+        M0[nL:m-nL, nL:n-nL] = self.compute_A(j)
+        M0[m-mL:, n-nL:] = ML[::-1, ::-1]
 
         return 1 / np.sqrt(2) * M0
 
     def gramian(self, j):
         d = self.d
+        bc = self.bc
         G = np.zeros((2**j + d - 1, 2**j + d - 1))
 
         g = self.sf.gramian()
         for k in range(2**j - d + 1):
             G[k+d-1, k:k+2*d-1] = g
+        if bc:
+            G = G[1:-1, 1:-1]
 
         M0 = self.refinement_matrix(j)
-        n = 2 * d - 2
-        U = M0[:n, :n]
-        L = M0[n:2*n, :n]
-        lhs = np.identity(n**2) - np.kron(U.T, U.T)
-        rhs = (U.T @ G[:n, n:2*n] @ L
-               + L.T @ G[n:2*n, :n] @ U
-               + L.T @ G[n:2*n, n:2*n] @ L).reshape(-1, order='F')
-        GL = np.linalg.solve(lhs, rhs).reshape((n, n), order='F')
-        G[:n, :n] = GL
-        G[-n:, -n:] = GL[::-1, ::-1]
+        m = 2 * d - 2 - bc
+        n = m + 2 * d - 2
+        U = M0[:m, :m]
+        L = M0[m:n, :m]
+        lhs = np.identity(m**2) - np.kron(U.T, U.T)
+        rhs = (U.T @ G[:m, m:n] @ L
+               + L.T @ G[m:n, :m] @ U
+               + L.T @ G[m:n, m:n] @ L).reshape(-1, order='F')
+        GL = np.linalg.solve(lhs, rhs).reshape((m, m), order='F')
+        G[:m, :m] = GL
+        G[-m:, -m:] = GL[::-1, ::-1]
 
         return G
 
@@ -136,6 +160,8 @@ class PrimalMRA:
             Ad[1:, :-1] -= A
             Ad[1:, 1:] += A
             A = 2**(2*j) * Ad
+        if self.bc:
+            A = A[1:-1, 1:-1]
         return A
 
 

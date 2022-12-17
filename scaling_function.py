@@ -92,7 +92,6 @@ class PrimalScalingFunction(ScalingFunction):
 class DualScalingFunction(ScalingFunction):
     def __init__(self, d, d_t):
         assert (d + d_t) % 2 == 0
-        self.d = d_t
         self.l1 = -floor(d / 2) - d_t + 1
         self.l2 = ceil(d / 2) + d_t - 1
         K = (d + d_t) // 2
@@ -120,6 +119,25 @@ class DualScalingFunction(ScalingFunction):
         X = np.arange(eta.size)
         X = (X - X.mean()) * 2**(-level) + d % 2 / 2
         self.phi = interp1d(X, eta, bounds_error=False, fill_value=0.)
+
+    def gramian(self):
+        offset = self.a.size - 1
+        a = self.refinement_coeffs()
+        a_corr = np.correlate(a, a, 'full')
+
+        def entry(k, m):
+            shift = 2 * k - m
+            if abs(shift) > offset:
+                return 0
+            return a_corr[shift+offset]
+        A = np.array([[entry(k, m) for m in range(-offset + 1, offset)]
+                      for k in range(-offset + 1, offset)])
+        w, v = np.linalg.eig(A)
+        idx = np.argmax(w)
+        assert np.isclose(w[idx], 2.)
+        g = v[:, idx]
+        g /= g.sum()
+        return g
 
 
 class MotherWavelet(PrimalScalingFunction):
