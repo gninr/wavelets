@@ -13,8 +13,8 @@ class PrimalMRA:
         assert d > 1
         self.d = d
         self.bc = bc
-        self.compute_ML()
         self.sf = PrimalScalingFunction(d)
+        self.compute_ML()
 
     def basis_functions(self, j, nu=0, from_refine_mat=False):
         d = self.d
@@ -99,7 +99,7 @@ class PrimalMRA:
         d = self.d
         a = self.sf.refinement_coeffs()
         A = np.zeros((2**(j+1) - d + 1, 2**j - d + 1))
-        for k in range(2**j - d + 1):
+        for k in range(A.shape[1]):
             A[2*k:2*k+d+1, k] = a
         return A
 
@@ -166,31 +166,38 @@ class PrimalMRA:
 
 
 class DualMRA:
-    def __init__(self, d, d_t):
+    def __init__(self, d, d_t, bc=False):
         self.d = d
         self.d_t = d_t
         self.j0 = ceil(np.log2(d + 2 * d_t - 3) + 1)
+        self.bc = bc
         self.sf = PrimalScalingFunction(d)
         self.sf_t = DualScalingFunction(d, d_t)
-        self.mra = PrimalMRA(d)
+        self.mra = PrimalMRA(d, bc)
         self.compute_ML()
 
     def compute_ML(self):
         d = self.d
         d_t = self.d_t
+        bc = self.bc
         l1 = self.sf.l1
         l2 = self.sf.l2
         l1_t = self.sf_t.l1
         l2_t = self.sf_t.l2
         a = self.sf.refinement_coeffs()
         a_t = self.sf_t.refinement_coeffs()
-        ML_t = np.zeros((2 * d + 3 * d_t - 5, d + d_t - 2))
+        if bc and d == 2:
+            ML_t = np.zeros((5 * d_t,  2 * d_t))
+        else:
+            ML_t = np.zeros((2 * d + 3 * d_t - 5 - bc, d + d_t - 2 - bc))
+        mL, nL = ML_t.shape
 
         ML = self.mra.ML
+        m, n = ML.shape
         ML_full = np.zeros_like(ML_t)
-        ML_full[:2*d-2, :d-1] = ML
-        for k in range(d - 1, d + d_t - 2):
-            ML_full[2*k-d+1:2*k+2, k] = a
+        ML_full[:m, :n] = ML
+        for k in range(n, nL):
+            ML_full[2*k-n:2*k-n+d+1, k] = a
         ML = ML_full
 
         # Compute block of ML_t corresponding to k = d-2, ..., d+2*d_t-3
@@ -213,38 +220,6 @@ class DualMRA:
                 res += binom(r, i) * k**i * alpha0[r-i]
             return res
 
-        # Compute beta_{n,r}
-        def beta(n, r):
-            res = 0
-            for k in range(ceil((n-l2_t) / 2), -l1_t):
-                res += alpha(k, r) * a_t[n-2*k-l1_t]
-            return res
-
-        def divided_diff(f, t):
-            if t.size == 1:
-                return f(t[0])
-            return (divided_diff(f, t[1:]) - divided_diff(f, t[:-1])) \
-                / (t[-1] - t[0])
-
-        D1 = np.zeros((d_t, d_t))
-        D2 = np.zeros((d_t, d_t))
-        D3 = np.zeros((d_t, d_t))
-        k0 = -l1_t - 1
-        for n in range(d_t):
-            for k in range(n + 1):
-                D1[n, k] = binom(n, k) * alpha0[n-k]
-                D2[n, k] = binom(n, k) * k0**(n-k) * (-1)**k
-                D3[n, k] = factorial(k)\
-                    * divided_diff(lambda x: x**n, np.arange(k + 1))
-        D_t = D1 @ D2 @ D3
-        rhs = np.empty((d_t, d + 3 * d_t - 3))
-        rhs[:, :d_t] = \
-            np.diag([2**(-r) for r in range(d_t)]) @ D_t[:, ::-1]
-        rhs[:, d_t:] = np.array(
-            [[beta(n-l1_t, r) for n in range(d + 2 * d_t - 3)]
-             for r in range(d_t)])
-        ML_t[d-2:, d-2:] = solve_triangular(D_t, rhs, lower=True)[::-1, :].T
-
         def compute_gramian():
             n = ML.shape[1]
             UL = ML[:n, :]
@@ -256,33 +231,83 @@ class DualMRA:
             gamma = np.linalg.solve(lhs, rhs)
             return gamma.reshape((n, n), order='F')
 
-        gramian_full = np.identity(2 * d + 3 * d_t - 5)
-        for k in range(d - 3, -1, -1):
-            gramian_full[:d+d_t-2, :d+d_t-2] = compute_gramian()
-            B_k = ML[:, :k+d].T @ gramian_full[:, k+1:2*k+d+1] / 2.
+        if bc and d == 2:
+            # Compute beta_{n,r}
+            def beta(n, r):
+                res = 0
+                for k in range(ceil((n-d_t) / 2), d_t + 1):
+                    res += alpha(k, r) * a_t[n-2*k+d_t]
+                return res
 
-            delta = np.zeros(k + d)
-            delta[k] = 1
-            ML_t[k+1:2*k+d+1, k] = np.linalg.solve(B_k, delta)
+            ML_t[:d_t, :d_t] = np.diag([2**(-r) for r in range(d_t)])
+            ML_t[d_t, :d_t] = np.array(
+                [2**(-r) * alpha(d_t, r) for r in range(d_t)])
+            ML_t[d_t+1:3*d_t, :d_t] = np.array(
+                [[beta(n+d_t+2, r) for r in range(d_t)]
+                 for n in range(2 * d_t - 1)])
+            for k in range(d_t, 2 * d_t):
+                ML_t[2*k-d_t+1:2*k+d_t+2, k] = a_t
+
+            # Biorthogonalize
+
+            gramian = compute_gramian()
+            ML_t[:2*d_t, :] = gramian @ ML_t[:2*d_t, :]
+            ML_t = np.linalg.solve(gramian.T, ML_t.T).T
+            ML_t = ML_t[:3*d_t, :d_t]
+
+        else:
+            # Compute beta_{n,r}
+            def beta(n, r):
+                res = 0
+                for k in range(ceil((n-l2_t) / 2), -l1_t):
+                    res += alpha(k, r) * a_t[n-2*k-l1_t]
+                return res
+
+            def divided_diff(f, t):
+                if t.size == 1:
+                    return f(t[0])
+                return (divided_diff(f, t[1:]) - divided_diff(f, t[:-1])) \
+                    / (t[-1] - t[0])
+
+            D1 = np.zeros((d_t, d_t))
+            D2 = np.zeros((d_t, d_t))
+            D3 = np.zeros((d_t, d_t))
+            k0 = -l1_t - 1
+            for n in range(d_t):
+                for k in range(n + 1):
+                    D1[n, k] = binom(n, k) * alpha0[n-k]
+                    D2[n, k] = binom(n, k) * k0**(n-k) * (-1)**k
+                    D3[n, k] = factorial(k)\
+                        * divided_diff(lambda x: x**n, np.arange(k + 1))
+            D_t = D1 @ D2 @ D3
+            rhs = np.empty((d_t, d + 3 * d_t - 3))
+            rhs[:, :d_t] = \
+                np.diag([2**(-r) for r in range(d_t)]) @ D_t[:, ::-1]
+            rhs[:, d_t:] = np.array(
+                [[beta(n-l1_t, r) for n in range(d + 2 * d_t - 3)]
+                 for r in range(d_t)])
+            ML_t[d-2-bc:, d-2-bc:] = \
+                solve_triangular(D_t, rhs, lower=True)[::-1, :].T
+
+            # Compute block of ML_t corresponding to k = 0, ..., d-3
+
+            gramian_full = np.identity(mL)
+            for k in range(d - 3 - bc, -1, -1):
+                gramian_full[:nL, :nL] = compute_gramian()
+                B_k = ML[:, :k+d].T @ gramian_full[:, k+1:2*k+d+1] / 2.
+
+                delta = np.zeros(k + d)
+                delta[k] = 1
+                ML_t[k+1:2*k+d+1, k] = np.linalg.solve(B_k, delta)
+
+            # Biorthogonalize
+
+            gramian = np.triu(compute_gramian())
+            gramian[:d-2-bc, :d-2-bc] = np.identity(d - 2 - bc)
+            ML_t[:d+d_t-2-bc, :] = gramian @ ML_t[:d+d_t-2-bc, :]
+            ML_t = solve_triangular(gramian.T, ML_t.T, lower=True).T
+
         ML_t[np.abs(ML_t) < 1e-9] = 0.
-
-        # Biorthogonalize
-
-        gramian = np.triu(compute_gramian())
-        gramian[:d-2, :d-2] = np.identity(d - 2)
-        ML_t[:d+d_t-2, :d+d_t-2] = gramian @ ML_t[:d+d_t-2, :d+d_t-2]
-        ML_t = solve_triangular(gramian.T, ML_t.T, lower=True).T
-
-        """
-        # Apply boundary condition
-        UL = ML_t[:d+d_t-2, :d+d_t-2]
-        w, v = np.linalg.eig(UL.T)
-        idx = np.argmax(w)
-        assert np.isclose(w[idx], 1.)
-        la = v[:, idx]
-        la /= la[0]
-        """
-
         self.ML = ML_t
 
     def compute_A(self, j):
@@ -290,37 +315,50 @@ class DualMRA:
         d = self.d
         d_t = self.d_t
         a_t = self.sf_t.refinement_coeffs()
-        A_t = np.zeros((2**(j+1) - d - 2 * d_t + 3, 2**j - d - 2 * d_t + 3))
-        for k in range(2**j - d - 2 * d_t + 3):
-            A_t[2*k:2*k+d+2*d_t-1, k] = a_t
+        if self.bc and d == 2:
+            A_t = np.zeros((2**(j+1) - 2 * d_t - 3,
+                            2**j - 2 * d_t - 1))
+            for k in range(A_t.shape[1]):
+                A_t[2*k:2*k+2*d_t+1, k] = a_t
+        else:
+            A_t = np.zeros((2**(j+1) - d - 2 * d_t + 3,
+                            2**j - d - 2 * d_t + 3))
+            for k in range(A_t.shape[1]):
+                A_t[2*k:2*k+d+2*d_t-1, k] = a_t
         return A_t
 
     def refinement_matrix(self, j):
         d = self.d
-        d_t = self.d_t
-        M0_t = np.zeros((2**(j+1) + d - 1, 2**j + d - 1))
-        M0_t[:2*d+3*d_t-5, :d+d_t-2] = self.ML
-        M0_t[d+d_t-2:2**(j+1)-d_t+1, d+d_t-2:2**j-d_t+1] = self.compute_A(j)
-        M0_t[-(2*d+3*d_t-5):, -(d+d_t-2):] = self.ML[::-1, ::-1]
+        bc = self.bc
+        M0_t = np.zeros((2**(j+1) + d - 1 - 2 * bc, 2**j + d - 1 - 2 * bc))
+        m, n = M0_t.shape
+        ML_t = self.ML
+        mL, nL = ML_t.shape
+        A_t = self.compute_A(j)
+        shift = (m - A_t.shape[0]) // 2
+        M0_t[:mL, :nL] = ML_t
+        M0_t[shift:m-shift, nL:n-nL] = A_t
+        M0_t[m-mL:, n-nL:] = ML_t[::-1, ::-1]
 
         return 1 / np.sqrt(2) * M0_t
 
 
 class WaveletBasis:
-    def __init__(self, d, d_t):
+    def __init__(self, d, d_t, bc=False):
         self.d = d
         self.d_t = d_t
         self.j0 = ceil(np.log2(d + d_t - 2) + 1)
+        self.bc = bc
         self.sf = PrimalScalingFunction(d)
         self.sf_t = DualScalingFunction(d, d_t)
         self.mw = MotherWavelet(d, d_t)
-        self.mra = PrimalMRA(d)
-        self.mra_t = DualMRA(d, d_t)
+        self.mra = PrimalMRA(d, bc)
+        self.mra_t = DualMRA(d, d_t, bc)
         self.compute_GL()
 
     def basis_functions(self, j, nu=0):
         d = self.d
-        n = 2**j
+        m = 2**(j+1) + d - 1
         bs = []
 
         def bspline(knots, coeffs, d):
@@ -333,9 +371,15 @@ class WaveletBasis:
         knots = np.concatenate((np.zeros(d - 1),
                                 np.linspace(0, 1, 2**(j+1) + 1),
                                 np.ones(d - 1)))
-        for k in range(n):
-            coeffs = 2**((j+1)/2) * M1[:, k]
-            bs.append(bspline(knots, coeffs, d))
+        if self.bc:
+            for k in range(2**j - 2):
+                coeffs = np.zeros(m)
+                coeffs[1:-1] = 2**((j+1)/2) * M1[:, k]
+                bs.append(bspline(knots, coeffs, d))
+        else:
+            for k in range(2**j):
+                coeffs = 2**((j+1)/2) * M1[:, k]
+                bs.append(bspline(knots, coeffs, d))
         return bs
 
     def support(self, j, k):
@@ -496,14 +540,15 @@ class WaveletBasis:
             M1_t[np.abs(M1_t) < 1e-9] = 0.
             return M0, M1, M0_t, M1_t
 
-        d = self.d
-        d_t = self.d_t
-        M1 = np.zeros((2**(j+1) + d - 1, 2**j))
-        M1[:2*(d+d_t-2), :(d+d_t-2)//2] = self.GL
-        M1[d-1:1-d, (d+d_t-2)//2:-(d+d_t-2)//2] = self.compute_B(j)
-        M1[-2*(d+d_t-2):, -(d+d_t-2)//2:] = self.GL[::-1, ::-1]
+        else:
+            d = self.d
+            d_t = self.d_t
+            M1 = np.zeros((2**(j+1) + d - 1, 2**j))
+            M1[:2*(d+d_t-2), :(d+d_t-2)//2] = self.GL
+            M1[d-1:1-d, (d+d_t-2)//2:-(d+d_t-2)//2] = self.compute_B(j)
+            M1[-2*(d+d_t-2):, -(d+d_t-2)//2:] = self.GL[::-1, ::-1]
 
-        return 1 / np.sqrt(2) * M1
+            return 1 / np.sqrt(2) * M1
 
     def gramian(self, j):
         G = self.mra.gramian(j + 1)
