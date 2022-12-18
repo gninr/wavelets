@@ -358,7 +358,6 @@ class WaveletBasis:
 
     def basis_functions(self, j, nu=0):
         d = self.d
-        m = 2**(j+1) + d - 1
         bs = []
 
         def bspline(knots, coeffs, d):
@@ -372,7 +371,8 @@ class WaveletBasis:
                                 np.linspace(0, 1, 2**(j+1) + 1),
                                 np.ones(d - 1)))
         if self.bc:
-            for k in range(2**j - 2):
+            m = 2**(j+1) + d - 1
+            for k in range(2**j):
                 coeffs = np.zeros(m)
                 coeffs[1:-1] = 2**((j+1)/2) * M1[:, k]
                 bs.append(bspline(knots, coeffs, d))
@@ -398,9 +398,9 @@ class WaveletBasis:
         bs = self.basis_functions(j, nu)
         if boundary:
             L = self.d + self.d_t - 2
-            x = np.linspace(0, 2**(-j) * L, 1000)
+            x = np.linspace(0, L, 1000)
             assert k is not None and k < L // 2
-            plt.plot(2**j * x, 2**(-j/2) * bs[k](x))
+            plt.plot(x, 2**(-j/2) * bs[k](2**(-j) * x))
         else:
             x = np.linspace(0, 1, 1000)
             if k is None:
@@ -418,14 +418,15 @@ class WaveletBasis:
         q = 2**(j+1) - d + 1
 
         ML = self.mra.ML
-        P = np.identity(q + 2 * d - 2)
-        P[:2*d-2, :d-1] = ML
-        P[2-2*d:, 1-d:] = ML[::-1, ::-1]
+        mL, nL = ML.shape
+        P = np.identity(q + 2 * nL)
+        P[:mL, :nL] = ML
+        P[q+2*nL-mL:, q+nL:] = ML[::-1, ::-1]
 
-        ML_inv = np.linalg.inv(P[:2*d-2, :2*d-2])
-        P_inv = np.identity(q + 2 * d - 2)
-        P_inv[:2*d-2, :2*d-2] = ML_inv
-        P_inv[2-2*d:, 2-2*d:] = ML_inv[::-1, ::-1]
+        ML_inv = np.linalg.inv(P[:mL, :mL])
+        P_inv = np.identity(q + 2 * nL)
+        P_inv[:mL, :mL] = ML_inv
+        P_inv[q+2*nL-mL:, q+2*nL-mL:] = ML_inv[::-1, ::-1]
 
         A = self.mra.compute_A(j)
         H = np.identity(q)
@@ -466,25 +467,25 @@ class WaveletBasis:
         rows -= 1
         F[rows, cols] = 1
 
-        A_hat = np.zeros((q + 2*d - 2, p + 2 * d - 2))
-        A_hat[:d-1, :d-1] = np.identity(d - 1)
-        A_hat[d-1:q+d-1, d-1:p+d-1] = A
-        A_hat[1-d:, 1-d:] = np.identity(d - 1)
+        A_hat = np.zeros((q + 2 * nL, p + 2 * nL))
+        A_hat[:nL, :nL] = np.identity(nL)
+        A_hat[nL:q+nL, nL:p+nL] = A
+        A_hat[q+nL:, p+nL:] = np.identity(nL)
 
         B_hat = np.zeros_like(A_hat.T)
-        B_hat[:d-1, :d-1] = np.identity(d - 1)
-        B_hat[d-1:p+d-1, d-1:q+d-1] = B
-        B_hat[1-d:, 1-d:] = np.identity(d - 1)
+        B_hat[:nL, :nL] = np.identity(nL)
+        B_hat[nL:p+nL, nL:q+nL] = B
+        B_hat[p+nL:, q+nL:] = np.identity(nL)
 
-        F_hat = np.zeros((q + 2 * d - 2, p + d - 1))
-        F_hat[d-1:l2+d-2, :l2-1] = np.identity(l2 - 1)
-        F_hat[d-1:q+d-1, l2-1:p+l2-1] = F
-        F_hat[l1-d+1:1-d, l1:] = np.identity(-l1)
+        F_hat = np.zeros((q + 2 * nL, 2**j))
+        F_hat[nL:l2-1+nL, :l2-1] = np.identity(l2 - 1)
+        F_hat[nL:q+nL, l2-1:p+l2-1] = F
+        F_hat[q+nL+l1:q+nL, 2**j+l1:] = np.identity(-l1)
 
-        H_hat = np.identity(q + 2 * d - 2)
-        H_hat[d-1:1-d, d-1:1-d] = H
-        H_hat_inv = np.identity(q + 2 * d - 2)
-        H_hat_inv[d-1:1-d, d-1:1-d] = H_inv
+        H_hat = np.identity(q + 2 * nL)
+        H_hat[nL:q+nL, nL:q+nL] = H
+        H_hat_inv = np.identity(q + 2 * nL)
+        H_hat_inv[nL:q+nL, nL:q+nL] = H_inv
 
         M0 = self.mra.refinement_matrix(j)
         M1 = (-1)**(d+1) * np.sqrt(2) / b * P @ H_hat_inv @ F_hat
@@ -495,17 +496,18 @@ class WaveletBasis:
     def compute_GL(self):
         d = self.d
         d_t = self.d_t
+        bc = self.bc
         j0 = self.mra_t.j0
         M0, M1, _, G1 = self.initial_completion(j0)
         M0_t = self.mra_t.refinement_matrix(j0)
         M1 = M1 - M0 @ M0_t.T @ M1
         M1_t = G1.T
 
-        GL = np.sqrt(2) * M1[:2*(d+d_t-2), :(d+d_t-2)//2]
+        GL = np.sqrt(2) * M1[:2*(d+d_t-2)-bc, :(d+d_t-2)//2]
         GL[np.abs(GL) < 1e-9] = 0.
         self.GL = GL
 
-        GL_t = np.sqrt(2) * M1_t[:2*d+d_t-3, :(d+d_t-2)//2]
+        GL_t = np.sqrt(2) * M1_t[:2*d+d_t-3-bc, :(d+d_t-2)//2]
         GL_t[np.abs(GL_t) < 1e-9] = 0.
         self.GL_t = GL_t
 
@@ -542,11 +544,16 @@ class WaveletBasis:
 
         else:
             d = self.d
-            d_t = self.d_t
-            M1 = np.zeros((2**(j+1) + d - 1, 2**j))
-            M1[:2*(d+d_t-2), :(d+d_t-2)//2] = self.GL
-            M1[d-1:1-d, (d+d_t-2)//2:-(d+d_t-2)//2] = self.compute_B(j)
-            M1[-2*(d+d_t-2):, -(d+d_t-2)//2:] = self.GL[::-1, ::-1]
+            bc = self.bc
+            M1 = np.zeros((2**(j+1) + d - 1 - 2 * bc, 2**j))
+            m, n = M1.shape
+            GL = self.GL
+            mL, nL = GL.shape
+            B = self.compute_B(j)
+            shift = (m - B.shape[0]) // 2
+            M1[:mL, :nL] = GL
+            M1[shift:m-shift, nL:n-nL] = B
+            M1[m-mL:, n-nL:] = GL[::-1, ::-1]
 
             return 1 / np.sqrt(2) * M1
 
@@ -560,12 +567,13 @@ class WaveletBasis:
 
 
 class MultiscaleWaveletBasis:
-    def __init__(self, d, d_t):
+    def __init__(self, d, d_t, bc=False):
         self.d = d
         self.d_t = d_t
+        self.bc = bc
         self.j0 = ceil(np.log2(d + d_t - 2) + 1)
-        self.mra = PrimalMRA(d)
-        self.wb = WaveletBasis(d, d_t)
+        self.mra = PrimalMRA(d, bc)
+        self.wb = WaveletBasis(d, d_t, bc)
 
     def refinement_matrix(self, s, j0=None):
         if j0 is None:
@@ -574,7 +582,7 @@ class MultiscaleWaveletBasis:
             assert j0 >= self.j0
 
         d = self.d
-        T = np.identity(2**(j0+s) + d - 1)
+        T = np.identity(2**(j0+s) + d - 1 - 2 * self.bc)
         for j in range(j0, j0 + s):
             M0 = self.mra.refinement_matrix(j)
             M1 = self.wb.refinement_matrix(j)
@@ -592,3 +600,13 @@ class MultiscaleWaveletBasis:
         G = self.mra.gramian(j0 + s)
         T = self.refinement_matrix(s, j0)
         return T.T @ G @ T
+
+    def inner_product(self, s, j0=None, nu=0):
+        if j0 is None:
+            j0 = self.j0
+        else:
+            assert j0 >= self.j0
+
+        A = self.mra.inner_product(j0 + s, nu)
+        T = self.refinement_matrix(s, j0)
+        return T.T @ A @ T
