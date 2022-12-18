@@ -98,9 +98,10 @@ class PrimalMRA:
     def compute_A(self, j):
         d = self.d
         a = self.sf.refinement_coeffs()
+        n = a.size
         A = np.zeros((2**(j+1) - d + 1, 2**j - d + 1))
         for k in range(A.shape[1]):
-            A[2*k:2*k+d+1, k] = a
+            A[2*k:2*k+n, k] = a
         return A
 
     def refinement_matrix(self, j):
@@ -144,7 +145,10 @@ class PrimalMRA:
 
     def inner_product(self, j, nu=0):
         d0 = self.d - nu
-        A = PrimalMRA(d0).gramian(j)
+        if d0 == 1:
+            A = np.identity(2**j)
+        else:
+            A = PrimalMRA(d0).gramian(j)
 
         for d in range(d0 + 1, self.d + 1):
             for i in range(d - 2):
@@ -241,7 +245,7 @@ class DualMRA:
 
             ML_t[:d_t, :d_t] = np.diag([2**(-r) for r in range(d_t)])
             ML_t[d_t, :d_t] = np.array(
-                [2**(-r) * alpha(d_t, r) for r in range(d_t)])
+                [2**(-r) * alpha(d_t + 1, r) for r in range(d_t)])
             ML_t[d_t+1:3*d_t, :d_t] = np.array(
                 [[beta(n+d_t+2, r) for r in range(d_t)]
                  for n in range(2 * d_t - 1)])
@@ -315,16 +319,15 @@ class DualMRA:
         d = self.d
         d_t = self.d_t
         a_t = self.sf_t.refinement_coeffs()
+        n = a_t.size
         if self.bc and d == 2:
             A_t = np.zeros((2**(j+1) - 2 * d_t - 3,
                             2**j - 2 * d_t - 1))
-            for k in range(A_t.shape[1]):
-                A_t[2*k:2*k+2*d_t+1, k] = a_t
         else:
             A_t = np.zeros((2**(j+1) - d - 2 * d_t + 3,
                             2**j - d - 2 * d_t + 3))
-            for k in range(A_t.shape[1]):
-                A_t[2*k:2*k+d+2*d_t-1, k] = a_t
+        for k in range(A_t.shape[1]):
+            A_t[2*k:2*k+n, k] = a_t
         return A_t
 
     def refinement_matrix(self, j):
@@ -347,7 +350,10 @@ class WaveletBasis:
     def __init__(self, d, d_t, bc=False):
         self.d = d
         self.d_t = d_t
-        self.j0 = ceil(np.log2(d + d_t - 2) + 1)
+        if bc and d == 2:
+            self.j0 = ceil(np.log2(3 / 2 * d_t + 1) + 1)
+        else:
+            self.j0 = ceil(np.log2(d + d_t - 2) + 1)
         self.bc = bc
         self.sf = PrimalScalingFunction(d)
         self.sf_t = DualScalingFunction(d, d_t)
@@ -387,19 +393,35 @@ class WaveletBasis:
         d = self.d
         d_t = self.d_t
         n = (d + d_t - 2) // 2  # number of boundary wavelets
-        if k < n:
-            return (0, 2**(-j) * (d + d_t - 2))
-        elif k >= 2**j - n:
-            return (1 - 2**(-j) * (d + d_t - 2), 1)
+        if self.bc and d == 2:
+            if k < d_t // 2:
+                return (0, 2**(-j) * (d_t + 1))
+            elif k >= 2**j - d_t // 2:
+                return (1 - 2**(-j) * (d_t + 1), 1)
+            else:
+                return (max(2**(-j) * (k-n), 0),
+                        min(2**(-j) * (k-n+d+d_t-1), 1))
         else:
-            return (max(2**(-j) * (k-n), 0), min(2**(-j) * (k-n+d+d_t-1), 1))
+            if k < n:
+                return (0, 2**(-j) * (d + d_t - 2))
+            elif k >= 2**j - n:
+                return (1 - 2**(-j) * (d + d_t - 2), 1)
+            else:
+                return (max(2**(-j) * (k-n), 0),
+                        min(2**(-j) * (k-n+d+d_t-1), 1))
 
     def plot(self, j, k=None, nu=0, boundary=False):
         bs = self.basis_functions(j, nu)
         if boundary:
-            L = self.d + self.d_t - 2
+            d = self.d
+            d_t = self.d_t
+            if self.bc and d == 2:
+                L = d_t + 1
+                assert k is not None and k < d_t // 2
+            else:
+                L = self.d + self.d_t - 2
+                assert k is not None and k < L // 2
             x = np.linspace(0, L, 1000)
-            assert k is not None and k < L // 2
             plt.plot(x, 2**(-j/2) * bs[k](2**(-j) * x))
         else:
             x = np.linspace(0, 1, 1000)
@@ -503,11 +525,16 @@ class WaveletBasis:
         M1 = M1 - M0 @ M0_t.T @ M1
         M1_t = G1.T
 
-        GL = np.sqrt(2) * M1[:2*(d+d_t-2)-bc, :(d+d_t-2)//2]
+        if bc and d == 2:
+            GL = np.sqrt(2) * M1[:2*d_t+1, :d_t//2]
+            GL_t = np.sqrt(2) * M1_t[:2*d_t+1, :d_t//2]
+        else:
+            GL = np.sqrt(2) * M1[:2*(d+d_t-2)-bc, :(d+d_t-2)//2]
+            GL_t = np.sqrt(2) * M1_t[:2*d+d_t-3-bc, :(d+d_t-2)//2]
+
         GL[np.abs(GL) < 1e-9] = 0.
         self.GL = GL
 
-        GL_t = np.sqrt(2) * M1_t[:2*d+d_t-3-bc, :(d+d_t-2)//2]
         GL_t[np.abs(GL_t) < 1e-9] = 0.
         self.GL_t = GL_t
 
@@ -522,6 +549,8 @@ class WaveletBasis:
         return B
 
     def refinement_matrix(self, j, full=False):
+        assert j >= self.j0
+
         if full:
             M0, M1, _, G1 = self.initial_completion(j)
             M0_t = self.mra_t.refinement_matrix(j)
@@ -561,9 +590,6 @@ class WaveletBasis:
         G = self.mra.gramian(j + 1)
         M1 = self.refinement_matrix(j)
         return M1.T @ G @ M1
-
-    def inner_product(self, j, nu=0):
-        pass
 
 
 class MultiscaleWaveletBasis:
