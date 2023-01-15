@@ -67,6 +67,9 @@ class PrimalMRA:
                 plt.plot(x, b(x))
         else:
             plt.plot(x, bs[k](x))
+            supp = self.support(j, k)
+            plt.plot(supp, [0, 0], 'ro')
+            print("support", supp)
         plt.show()
 
     def compute_ML(self):
@@ -430,6 +433,9 @@ class WaveletBasis:
                     plt.plot(x, b(x))
             else:
                 plt.plot(x, bs[k](x))
+                supp = self.support(j, k)
+                plt.plot(supp, [0, 0], 'ro')
+                print("support", supp)
         plt.show()
 
     def initial_completion(self, j):
