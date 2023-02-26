@@ -30,11 +30,7 @@ class PrimalScalingFunction(ScalingFunction):
         self.a = 2**(1-d) * np.array([binom(d, k - self.l1)
                                       for k in range(self.l1, self.l2 + 1)])
 
-        # knots = np.arange(self.l1, self.l2 + 1)
-        # self.phi = BSpline.basis_element(knots, extrapolate=False)
-        # print(self.phi.tck)
-
-        # function
+        # function handle
         knots = np.concatenate((np.zeros(d - 1),
                                 np.arange(d + 1),
                                 np.full(d - 1, d))) + self.l1
@@ -108,7 +104,7 @@ class DualScalingFunction(ScalingFunction):
         self.a = \
             np.array([entry(k) for k in range(self.l1, self.l2 + 1)])
 
-        # function
+        # function handle
         assert np.isclose(self.a.sum(), 2.)
         level = 10
         eta = np.array([1.])
@@ -147,11 +143,13 @@ class MotherWavelet(PrimalScalingFunction):
         self.l1 = 1 - (d + d_t) // 2
         self.l2 = (d + d_t) // 2
 
-        # function
+        # refinement coefficients
         sf_t = DualScalingFunction(d, d_t)
         a_t = sf_t.refinement_coeffs()
         sgn = (-1)**np.abs(np.arange(1 - sf_t.l2, 2 - sf_t.l1))
         self.b = sgn * np.flip(a_t)
+
+        # function handle
         knots = np.concatenate((np.zeros(d - 1),
                                 np.arange(2 * (d + d_t - 1) + 1) / 2,
                                 np.full(d - 1, d + d_t - 1))) + self.l1

@@ -603,9 +603,9 @@ class MultiscaleWaveletBasis:
         self.d = d
         self.d_t = d_t
         self.bc = bc
-        self.j0 = ceil(np.log2(d + d_t - 2) + 1)
         self.mra = PrimalMRA(d, bc)
         self.wb = WaveletBasis(d, d_t, bc)
+        self.j0 = self.wb.j0
 
     def refinement_matrix(self, s, j0=None):
         if j0 is None:
