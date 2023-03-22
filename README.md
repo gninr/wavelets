@@ -2,7 +2,7 @@
 
 This repository contains the code generating the numerical results in Chapter 3 of the thesis "Sensitivity-Guided Shape Reconstruction".
 
-# Dependencies
+## Dependencies
 
 The implementation depends on the following Python packages:
 
@@ -12,7 +12,7 @@ The implementation depends on the following Python packages:
 
 - SciPy
 
-# File description
+## File description
 
 - `scaling_function.py`
 
@@ -30,7 +30,7 @@ The implementation depends on the following Python packages:
 
     This notebook presents the usage and the validation of functions in `wavelet1d.py`.
 
-# References
+## References
 
 - Primbs, Miriam. 2006. “Stabile biortogonale Spline-Waveletbasen auf dem Intervall.”
 
